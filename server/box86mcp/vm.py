@@ -292,6 +292,16 @@ def _rewrite_cfg(cfg: Path, lines: list[str]) -> None:
     cfg.write_text(newline.join(lines) + newline, newline="")
 
 
+def _window_platform(env: dict) -> str:
+    """QT_QPA_PLATFORM for a visible window outside Windows: native Wayland when there's a
+    compositor, falling back to X11 (XWayland, on a Wayland desktop) if Qt's Wayland plugin is
+    missing or can't connect. Qt tries a ';'-separated list in order."""
+    platforms = [name for name, var in (("wayland", "WAYLAND_DISPLAY"), ("xcb", "DISPLAY")) if env.get(var)]
+    if not platforms:
+        raise RuntimeError("window=True needs a display: WAYLAND_DISPLAY or DISPLAY set")
+    return ";".join(platforms)
+
+
 def _free_port() -> int:
     """An unused loopback TCP port (86Box binds it a moment later)."""
     import socket
@@ -350,7 +360,8 @@ class VM:
 
     def start(self, held: bool = True, window: bool | None = None, extra_args: list[str] | None = None,
               com1_log: bool = False, debugger: bool = False, serial_ports: list[int] | None = None) -> dict:
-        """Launch 86Box. window=True shows the normal 86Box window (on $DISPLAY, outside Windows);
+        """Launch 86Box. window=True shows the normal 86Box window (outside Windows: on Wayland if
+        there is a compositor, else or failing that on $DISPLAY; see _window_platform);
         the default, None, shows it on Windows and runs headless elsewhere. com1_log=True captures
         COM1 output (off by default: with it, runs are not always byte-for-byte reproducible).
         debugger=True attaches to 86Box's GDB stub, for breakpoints, instruction steps and port I/O
@@ -405,9 +416,7 @@ class VM:
         if window and os.name == "nt":
             env.pop("QT_QPA_PLATFORM", None)   # Windows: Qt's native platform shows the window
         elif window:
-            if not env.get("DISPLAY"):
-                raise RuntimeError("window=True needs DISPLAY set to an X server (Wayland users: XWayland)")
-            env["QT_QPA_PLATFORM"] = "xcb"
+            env["QT_QPA_PLATFORM"] = _window_platform(env)
         else:
             env["QT_QPA_PLATFORM"] = "offscreen"
         log = open(self.log_path, "wb")
