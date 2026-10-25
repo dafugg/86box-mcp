@@ -71,8 +71,12 @@ sudo apt install build-essential cmake ninja-build pkg-config \
   libqt6opengl6-dev qt6-qpa-plugins libvulkan-dev libgl-dev libsdl3-dev libpng-dev \
   libfreetype-dev libopenal-dev librtmidi-dev libfluidsynth-dev libsndfile1-dev \
   libslirp-dev libserialport-dev libevdev-dev libxkbcommon-x11-dev libx11-dev \
-  libwayland-dev libzstd-dev libedit-dev libxcb-cursor0 mtools
+  libwayland-dev libzstd-dev libedit-dev libxcb-cursor0 qt6-wayland mtools
 ```
+
+`qt6-wayland` is only for `vm_start(window=True)` on a Wayland desktop: with
+it, 86Box opens a native Wayland window; without it, Qt falls back to
+XWayland, if `DISPLAY` is set.
 
 Then build with the automation socket enabled:
 
