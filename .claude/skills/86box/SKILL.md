@@ -103,7 +103,10 @@ measure the host renderer.
 - `breakpoint_set(addr)` for code, or `breakpoint_set(addr, "write"/"read"/"access", length)` for
   data. Addresses are linear: segment × 16 + offset in real mode.
 - `run_until_break`, `step_instructions(n)`.
-- `io_read`/`io_write` for device registers, `pci_scan`/`pci_config_read`.
+- `io_read`/`io_write` for device registers, `pci_scan`/`pci_config_read`/`pci_config_write`
+  (these don't need the debugger on an 86Box with the socket's `ior`/`pcir` commands).
+- `read_memory`/`write_memory` reach the whole 4 GB: `width=4` for MMIO registers, `view="smm"`
+  for SMRAM, `view="cpu"` for what the CPU sees now, `view="linear"` through the page tables.
 
 While the debugger has the CPU stopped, tools that need time fail, saying so: call `debug_continue`
 (or `run_until_break`) first. A breakpoint hit during another tool's call stops the CPU, and that

@@ -269,11 +269,31 @@ class Automation:
             attrs=[bytes.fromhex(h) for h in r["attrs"]],
         )
 
-    def memr(self, addr: int, length: int) -> bytes:
-        return bytes.fromhex(self.call(f"memr 0x{addr:x} {int(length)}")["data"])
+    @staticmethod
+    def _mem_opts(view: str | None, width: int) -> str:
+        # The plain form for the defaults, which every 86Box with the socket understands.
+        return (f" {view}" if view else "") + (f" {int(width)}" if width != 1 else "")
 
-    def memw(self, addr: int, data: bytes) -> dict:
-        return self.call(f"memw 0x{addr:x} {data.hex()}")
+    def memr(self, addr: int, length: int, view: str | None = None, width: int = 1) -> bytes:
+        """view: bus (the default), cpu, normal, smm or linear; width: the access size, 1, 2 or 4."""
+        return bytes.fromhex(self.call(f"memr 0x{addr:x} {int(length)}{self._mem_opts(view, width)}")["data"])
+
+    def memw(self, addr: int, data: bytes, view: str | None = None, width: int = 1) -> dict:
+        return self.call(f"memw 0x{addr:x} {data.hex()}{self._mem_opts(view, width)}")
+
+    def ior(self, port: int, width: int = 1, count: int = 1) -> list[int]:
+        return self.call(f"ior 0x{port:x} {int(width)} {int(count)}")["values"]
+
+    def iow(self, port: int, width: int, values: list[int]) -> dict:
+        return self.call(f"iow 0x{port:x} {int(width)} " + " ".join(f"0x{v:x}" for v in values))
+
+    def pcir(self, bus: int, dev: int, fn: int, reg: int, length: int, width: int = 4) -> tuple[bool, bytes]:
+        """(whether a card answers at bus:dev, the bytes) of configuration space, in width-byte cycles."""
+        r = self.call(f"pcir {bus} {dev} {fn} 0x{reg:x} {int(length)} {int(width)}")
+        return r["present"], bytes.fromhex(r["data"])
+
+    def pciw(self, bus: int, dev: int, fn: int, reg: int, data: bytes, width: int = 1) -> bool:
+        return self.call(f"pciw {bus} {dev} {fn} 0x{reg:x} {data.hex()} {int(width)}")["present"]
 
     def regs(self) -> dict:
         r = self.call("regs")

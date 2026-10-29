@@ -118,9 +118,17 @@ Then they read the text buffer at B800:0, or B000:0 for mode 7. That only
 works in BIOS text modes, and the reply says when the screen isn't in one.
 `wait text` only matches within a single row.
 
-**Memory and registers.** `memr` and `memw` go through
-`mem_readb_phys()` and `mem_writeb_phys()`: physical addresses, the same path
-the devices use. `regs` reads `cpu_state`.
+**Memory, I/O and registers.** `memr` and `memw` go through
+`mem_view_read()` and `mem_view_write()` in `mem.c`: the bus's mapping tables
+by default (the path the devices use), the CPU's (`cpu`), or for the SMM state
+the CPU isn't in, a walk of the mapping list (`normal`, `smm`). They call the
+mapping's handlers, splitting a word or dword the mapping can't take whole.
+`linear` translates each page with `mmutranslate_noabrt()` under
+`cpl_override`, then reads the CPU's view. `ior`/`iow` call `inb()`/`outb()`
+and their wider forms; `pcir`/`pciw` call the card's configuration handlers
+through `pci_config_read()`/`pci_config_write()` in `pci.c`, so 0xCF8 is left
+alone. All of them restore `cycles`, so nothing is charged to the guest.
+`regs` reads `cpu_state`.
 
 **Media and reset.** `fdd load|eject` and `cd load|eject` copy what the UI's
 menu handlers do, including the status-bar icon update. `reset hard` calls

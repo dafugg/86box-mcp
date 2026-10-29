@@ -60,6 +60,20 @@ remote-enabled 86Box on the internet, merged the same day):
 | fatal errors | A connected client gets `{"ok":false,"fatal":true,"error":...}` before the socket closes |
 | `info` `gdbstub_port` | The GDB stub's port, so an attached VM's debugger finds it |
 
+Open, for memory anywhere and devices without the debugger
+([#8584](https://github.com/86Box/86Box/pull/8584)):
+
+| Change | What it adds |
+|---|---|
+| `memr`/`memw` views and widths | Memory through the bus's view, the CPU's (now, outside SMM, or in SMM, for SMRAM), or a linear address through the page tables, in 1-, 2- or 4-byte accesses (`read_memory`/`write_memory` with `view` and `width`) |
+| `ior`, `iow` | Port I/O at any width (`io_read`, `io_write` without the debugger) |
+| `pcir`, `pciw` | PCI configuration space straight to the function, leaving 0xCF8 alone (`pci_scan`, `pci_config_read` without the debugger, and `pci_config_write`) |
+
+Until it is merged, the server asks once per connection whether the socket has
+these. Without them, `read_memory` and `write_memory` still work in the bus's
+view a byte at a time, `linear=True` walks the page tables in Python as
+before, and the I/O and PCI tools use the GDB stub.
+
 `86BOX_MIN_COMMIT` is the minimum 86Box for every MCP tool: an upstream
 commit with all of the above, the merge of #8466 (`1be46d317`, 2026-10-22).
 Any later master works too; the build scripts only warn about an older one.

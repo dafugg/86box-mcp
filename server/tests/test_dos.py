@@ -230,10 +230,14 @@ def test_memory_tools_bounds_find_and_diff(dos_vm):
         dos_vm.auto.step(3000)
         size = dos_vm.mem_bytes()
         assert size == 16384 * 1024
+        # Anywhere in the 4 GB address space, but not past it.
         with pytest.raises(ValueError):
-            server.read_memory(size - 8, 16)
+            server.read_memory(0xFFFFFFF8, 16)
         with pytest.raises(ValueError):
-            server.write_memory(size, "00")
+            server.write_memory(1 << 32, "00")
+        assert server.read_memory(size, 16).split()[1] == "ff"            # nothing past the RAM
+        assert server.read_memory(0xFFFFFFF0, 16).split()[1] == "ea"      # the reset vector's far JMP
+        assert server.read_memory(0x413, 2, width=2).split()[1] == "027f"  # 639 KB, read as a word
         # The BIOS keeps the conventional memory size, in KB, at 0x413: 639 here, as it reserves the
         # top 1 KB for its extended data area.
         assert "0x413" in server.find_memory(value=639, size=2, start=0x400, end=0x500)

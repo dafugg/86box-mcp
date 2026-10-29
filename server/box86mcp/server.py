@@ -1945,37 +1945,97 @@ def _span(start: int, end: int | None) -> tuple[int, int]:
     return start, end
 
 
-@tool()
-def read_memory(addr: int, length: int = 256, linear: bool = False) -> str:
-    """Hex dump of physical memory (real-mode seg:off -> seg*16+off). Up to 65536 bytes, within the
-    emulated RAM (vm_info reports mem_kb). linear=True reads at a linear address through the page
-    tables, as the CPU sees it with paging on (translate_address shows the walk)."""
-    if linear:
-        if not 0 <= length <= 65536:
-            raise ValueError("length is 0..65536")
-        v = vm()
+MEM_VIEWS = ("bus", "cpu", "normal", "smm", "linear")
+
+
+def _bus_access(v: VM) -> bool:
+    """Whether this 86Box's socket has memory views and access widths, and the ior/iow and pcir/pciw
+    commands. Asked once per connection."""
+    a = v.auto
+    if getattr(a, "bus_access", None) is None:
         try:
+            a.memr(0, 1, view="bus")
+            a.bus_access = True
+        except AutomationError:
+            a.bus_access = False
+    return a.bus_access
+
+
+def _need_bus_access(v: VM, what: str) -> None:
+    if not _bus_access(v):
+        raise AutomationError(f"{what} needs an 86Box whose automation socket has memory views, access "
+                              "widths and the ior/iow/pcir/pciw commands")
+
+
+def _mem_args(addr: int, length: int, view: str, width: int) -> None:
+    if view not in MEM_VIEWS:
+        raise ValueError(f"view is one of {', '.join(MEM_VIEWS)}")
+    if width not in (1, 2, 4):
+        raise ValueError("width must be 1, 2 or 4")
+    if not 0 <= length <= CHUNK or length % width:
+        raise ValueError(f"length is 0..{CHUNK}, a multiple of the width")
+    if not 0 <= addr or addr + length > 1 << 32:
+        raise ValueError(f"{addr:#x}+{length} is outside the 4 GB address space")
+
+
+@tool()
+def read_memory(addr: int, length: int = 256, linear: bool = False, view: str = "bus", width: int = 1) -> str:
+    """Hex dump of memory anywhere in the 4 GB address space: RAM, ROM, video memory, a device's
+    memory-mapped registers (real-mode seg:off -> seg*16+off). Up to 65536 bytes.
+
+    view picks whose view of memory: "bus" (the default) is what DMA and bus masters see, the
+    physical memory map; "cpu" is the processor's as it is now (in SMM, that includes SMRAM);
+    "normal" and "smm" are the processor's outside and inside SMM, whichever it is in; "linear"
+    (or linear=True) reads at a linear address through the page tables, as the CPU sees it with
+    paging on, with supervisor rights (translate_address shows the walk). width (1, 2 or 4) is the
+    size of each access, for registers that must be read as words or dwords; the dump then shows
+    little-endian values. Reading a device's registers can change its state (a FIFO, a status that
+    clears on read), as the guest's own reads would."""
+    if linear:
+        view = "linear"
+    _mem_args(addr, length, view, width)
+    v = vm()
+    if view == "bus" and width == 1:
+        data = v.auto.memr(addr, length)
+    elif view == "linear" and width == 1 and not _bus_access(v):
+        try:        # an older 86Box: walk the page tables here, reading RAM only
             data = _linear_reader(v, _pm_regs(v))(addr, length)
         except ValueError as e:
             raise AutomationError(str(e))
     else:
-        _check_range(addr, length)
-        data = vm().auto.memr(addr, length)
+        _need_bus_access(v, f'view="{view}", width={width}')
+        data = v.auto.memr(addr, length, view=view, width=width)
     lines = []
     for off in range(0, len(data), 16):
         chunk = data[off:off + 16]
         asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
-        lines.append(f"{addr + off:08x}  {chunk.hex(' '):<47}  {asc}")
+        if width == 1:
+            vals = chunk.hex(" ")
+        else:
+            vals = " ".join(chunk[i:i + width][::-1].hex() for i in range(0, len(chunk), width))
+        lines.append(f"{addr + off:08x}  {vals:<47}  {asc}")
     return "\n".join(lines)
 
 
 @tool()
-def write_memory(addr: int, hex_bytes: str) -> str:
-    """Write bytes (hex string, e.g. "90 90 cc") to physical memory, within the emulated RAM."""
-    data = bytes.fromhex(hex_bytes)
-    _check_range(addr, len(data))
-    vm().auto.memw(addr, data)
-    return f"wrote {len(data)} bytes at {addr:#x}"
+def write_memory(addr: int, hex_bytes: str | None = None, value: int | None = None, view: str = "bus",
+                 width: int = 1) -> str:
+    """Write bytes (hex string, e.g. "90 90 cc") anywhere in the 4 GB address space: RAM, video
+    memory, a device's memory-mapped registers. Or value: one number, written as a single access
+    of width bytes, little-endian. view and width are as for read_memory: width is the size of each
+    access ("linear" writes through the page tables, read-only pages included). The device acts on
+    the write at once, as if the guest had made it."""
+    if (hex_bytes is None) == (value is None):
+        raise ValueError("give hex_bytes or value")
+    data = bytes.fromhex(hex_bytes) if hex_bytes is not None else value.to_bytes(width, "little", signed=value < 0)
+    _mem_args(addr, len(data), view, width)
+    v = vm()
+    if view == "bus" and width == 1:
+        v.auto.memw(addr, data)
+    else:
+        _need_bus_access(v, f'view="{view}", width={width}')
+        v.auto.memw(addr, data, view=view, width=width)
+    return f"wrote {len(data)} bytes at {addr:#x}" + (f" ({view})" if view != "bus" else "")
 
 
 @tool()
@@ -2362,17 +2422,33 @@ def _io_values(out: str) -> list[int]:
     return [int(x, 16) for line in out.splitlines() if ":" in line for x in line.split(":", 1)[1].split()]
 
 
+def _io_in(v: VM, port: int, width: int, count: int) -> list[int]:
+    """IN from count ports upward: through the automation socket, or on an older 86Box, the GDB stub."""
+    if _bus_access(v):
+        return v.auto.ior(port, width, count)
+    _, g = _debugger()
+    return _io_values(g.monitor(f"i{_WIDTHS[width]} {port:x} {count * width:x}"))
+
+
+def _io_out(v: VM, port: int, width: int, value: int) -> None:
+    if _bus_access(v):
+        v.auto.iow(port, width, [value])
+    else:
+        _, g = _debugger()
+        g.monitor(f"o{_WIDTHS[width]} {port:x} {value:x}")
+
+
 @tool()
 def io_read(port: int, width: int = 1, count: int = 1) -> str:
     """Read count values of width bytes (1, 2 or 4) from I/O port `port` upward, as the CPU's IN would.
 
     Reading a port can change the device's state (a status register that clears on read, a FIFO).
-    Works while held. Needs vm_start(debugger=True).
+    Works while held. An 86Box whose automation socket predates I/O commands needs
+    vm_start(debugger=True).
     """
-    if width not in _WIDTHS or not 1 <= count <= 256:
-        raise ValueError("width must be 1, 2 or 4, and count 1..256")
-    _, g = _debugger()
-    vals = _io_values(g.monitor(f"i{_WIDTHS[width]} {port:x} {count * width:x}"))
+    if width not in _WIDTHS or not 1 <= count <= 256 or not 0 <= port <= 0xFFFF:
+        raise ValueError("port must be 0..0xffff, width 1, 2 or 4, and count 1..256")
+    vals = _io_in(vm(), port, width, count)
     return f"port {port:#x}: " + " ".join(f"{x:#0{2 + 2 * width}x}" for x in vals)
 
 
@@ -2380,14 +2456,18 @@ def io_read(port: int, width: int = 1, count: int = 1) -> str:
 def io_write(port: int, value: int, width: int = 1) -> str:
     """Write value (width 1, 2 or 4 bytes) to I/O port `port`, as the CPU's OUT would.
 
-    The device acts on it at once, as if the guest had written it. Works while held. Needs
-    vm_start(debugger=True).
+    The device acts on it at once, as if the guest had written it. Works while held. An 86Box
+    whose automation socket predates I/O commands needs vm_start(debugger=True).
     """
-    if width not in _WIDTHS:
-        raise ValueError("width must be 1, 2 or 4")
-    _, g = _debugger()
-    g.monitor(f"o{_WIDTHS[width]} {port:x} {value:x}")
+    if width not in _WIDTHS or not 0 <= port <= 0xFFFF:
+        raise ValueError("port must be 0..0xffff, and width 1, 2 or 4")
+    _io_out(vm(), port, width, value & ((1 << (8 * width)) - 1))
     return f"wrote {value:#x} to port {port:#x}"
+
+
+def _pci_address(bus: int, device: int, function: int) -> None:
+    if not (0 <= bus <= 255 and 0 <= device <= 31 and 0 <= function <= 7):
+        raise ValueError("bus is 0..255, device 0..31, function 0..7")
 
 
 _PCI_CLASSES = {0x00: "unclassified", 0x01: "storage", 0x02: "network", 0x03: "display", 0x04: "multimedia",
@@ -2395,8 +2475,12 @@ _PCI_CLASSES = {0x00: "unclassified", 0x01: "storage", 0x02: "network", 0x03: "d
                 0x0C: "serial bus"}
 
 
-def _pci_dwords(g: Gdb, bus: int, dev: int, fn: int, offsets: list[int]) -> list[int]:
-    """Read config dwords through configuration mechanism #1 (ports 0xCF8/0xCFC), restoring 0xCF8."""
+def _pci_dwords(v: VM, bus: int, dev: int, fn: int, offsets: list[int]) -> list[int]:
+    """Read config dwords: straight from the function through the automation socket, or on an older
+    86Box, through configuration mechanism #1 (ports 0xCF8/0xCFC) with the GDB stub, restoring 0xCF8."""
+    if _bus_access(v):
+        return [int.from_bytes(v.auto.pcir(bus, dev, fn, off & 0xFC, 4, 4)[1], "little") for off in offsets]
+    _, g = _debugger()
     saved = _io_values(g.monitor("il cf8 4"))[0]
     out = []
     for off in offsets:
@@ -2410,14 +2494,16 @@ def _pci_dwords(g: Gdb, bus: int, dev: int, fn: int, offsets: list[int]) -> list
 def pci_scan(bus: int = 0) -> str:
     """List the PCI functions on `bus`: address, vendor:device ID, class, and interrupt line/pin.
 
-    Through configuration mechanism #1, as a driver would. PCI machines only. Needs
-    vm_start(debugger=True).
+    PCI machines only. Reads each function's configuration space directly, without touching the
+    guest's 0xCF8; an 86Box whose automation socket predates that goes through configuration
+    mechanism #1 and needs vm_start(debugger=True).
     """
-    _, g = _debugger()
+    _pci_address(bus, 0, 0)
+    v = vm()
     lines = []
     for dev in range(32):
         for fn in range(8):
-            ident, cls, hdr, irq = _pci_dwords(g, bus, dev, fn, [0x00, 0x08, 0x0C, 0x3C])
+            ident, cls, hdr, irq = _pci_dwords(v, bus, dev, fn, [0x00, 0x08, 0x0C, 0x3C])
             if ident in (0xFFFFFFFF, 0):
                 if fn == 0:
                     break
@@ -2434,15 +2520,31 @@ def pci_scan(bus: int = 0) -> str:
 @tool()
 def pci_config_read(bus: int, device: int, function: int = 0, offset: int = 0, length: int = 64) -> str:
     """Hex dump of a PCI function's configuration space, offset..offset+length (up to 256), as
-    dwords. Needs vm_start(debugger=True)."""
+    dwords. Like pci_scan, needs vm_start(debugger=True) only on an older 86Box."""
+    _pci_address(bus, device, function)
     if not (0 <= offset < 256 and 1 <= length <= 256 - offset):
         raise ValueError("offset and length must stay within the 256-byte configuration space")
-    _, g = _debugger()
     start = offset & ~3
     offs = list(range(start, offset + length, 4))
-    vals = _pci_dwords(g, bus, device, function, offs)
+    vals = _pci_dwords(vm(), bus, device, function, offs)
     rows = [f"{o:02x}: {v:08x}" for o, v in zip(offs, vals)]
     return f"{bus:02x}:{device:02x}.{function} config:\n" + "\n".join(rows)
+
+
+@tool()
+def pci_config_write(bus: int, device: int, function: int, offset: int, value: int, width: int = 4) -> str:
+    """Write value to a PCI function's configuration space at offset, as one configuration cycle
+    of width bytes (1, 2 or 4), straight to the function (the guest's 0xCF8 is left alone). The
+    function acts on it at once: a BAR moves, a command bit turns decoding on or off."""
+    _pci_address(bus, device, function)
+    if width not in _WIDTHS or not 0 <= offset <= 256 - width:
+        raise ValueError("width must be 1, 2 or 4, and offset..offset+width within the 256 bytes")
+    v = vm()
+    _need_bus_access(v, "pci_config_write")
+    data = (value & ((1 << (8 * width)) - 1)).to_bytes(width, "little")
+    if not v.auto.pciw(bus, device, function, offset, data, width):
+        raise AutomationError(f"no PCI device at {bus:02x}:{device:02x}")
+    return f"wrote {value:#x} to {bus:02x}:{device:02x}.{function} offset {offset:#04x}"
 
 
 _LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")

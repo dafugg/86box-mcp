@@ -15,6 +15,9 @@ Without anything extra:
 | Repeatable runs, and time that stops while you look | `vm_start` (held), `step(ms)`, `hold`, `release` |
 | What the guest sees on screen, frame by frame | `screenshot`, `record_start`, `record_stop` |
 | Memory: driver state, DMA buffers, descriptor rings | `read_memory`, `write_memory`, `find_memory`, `snapshot_memory`, `diff_memory`, `wait_for_memory` |
+| The device's memory-mapped registers and frame buffer, SMRAM, a driver's virtual addresses | `read_memory`/`write_memory` with `width=2` or `4`, and `view="cpu"`, `"smm"` or `"linear"` |
+| Read and write the device's registers as the driver would | `io_read(port, width, count)`, `io_write(port, value, width)` |
+| See how the BIOS and the OS set up PCI, and change it | `pci_scan`, `pci_config_read`, `pci_config_write` |
 | CPU state at a 1 ms quantum boundary | `registers` |
 | Resets and crashes, including triple faults | `reset`, `vm_info` (`hard_resets`, `soft_resets`, `last_reset_ms`) |
 | Debug output from the guest | `serial_read`, `wait_for_serial` (COM1) |
@@ -29,8 +32,9 @@ With `vm_start(debugger=True)`, which uses 86Box's GDB stub:
 | Catch who writes a buffer or a variable | `breakpoint_set(addr, "write", length)`, also `"read"` and `"access"` |
 | Follow the driver one instruction at a time | `step_instructions(count)` |
 | Go on after a stop | `debug_continue`, or `run_until_break` again |
-| Read and write the device's registers as the driver would | `io_read(port, width, count)`, `io_write(port, value, width)` |
-| See how the BIOS and the OS set up PCI | `pci_scan`, `pci_config_read` |
+
+On an 86Box whose automation socket predates the `ior`/`iow`/`pcir` commands, `io_read`, `io_write`,
+`pci_scan` and `pci_config_read` need the debugger too.
 
 All of these work while the machine is held. Watchpoints stop the CPU at the
 instruction after the access. Addresses are linear: in real mode that's
