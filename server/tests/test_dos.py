@@ -7,7 +7,7 @@ import os
 import time
 
 from box86mcp import keys as K
-from box86mcp.protocol import Automation
+from box86mcp.protocol import Automation, AutomationError
 
 
 def type_line(auto: Automation, text: str) -> None:
@@ -237,7 +237,11 @@ def test_memory_tools_bounds_find_and_diff(dos_vm):
             server.write_memory(1 << 32, "00")
         assert server.read_memory(size, 16).split()[1] == "ff"            # nothing past the RAM
         assert server.read_memory(0xFFFFFFF0, 16).split()[1] == "ea"      # the reset vector's far JMP
-        assert server.read_memory(0x413, 2, width=2).split()[1] == "027f"  # 639 KB, read as a word
+        if server._bus_access(dos_vm):                                    # 86Box#8584 or later
+            assert server.read_memory(0x413, 2, width=2).split()[1] == "027f"  # 639 KB, read as a word
+        else:
+            with pytest.raises(AutomationError, match="needs an 86Box"):
+                server.read_memory(0x413, 2, width=2)
         # The BIOS keeps the conventional memory size, in KB, at 0x413: 639 here, as it reserves the
         # top 1 KB for its extended data area.
         assert "0x413" in server.find_memory(value=639, size=2, start=0x400, end=0x500)

@@ -60,7 +60,7 @@ remote-enabled 86Box on the internet, merged the same day):
 | fatal errors | A connected client gets `{"ok":false,"fatal":true,"error":...}` before the socket closes |
 | `info` `gdbstub_port` | The GDB stub's port, so an attached VM's debugger finds it |
 
-Open, for memory anywhere and devices without the debugger
+Merged on 2026-10-29, for memory anywhere and devices without the debugger
 ([#8584](https://github.com/86Box/86Box/pull/8584)):
 
 | Change | What it adds |
@@ -69,13 +69,13 @@ Open, for memory anywhere and devices without the debugger
 | `ior`, `iow` | Port I/O at any width (`io_read`, `io_write` without the debugger) |
 | `pcir`, `pciw` | PCI configuration space straight to the function, leaving 0xCF8 alone (`pci_scan`, `pci_config_read` without the debugger, and `pci_config_write`) |
 
-Until it is merged, the server asks once per connection whether the socket has
-these. Without them, `read_memory` and `write_memory` still work in the bus's
+The server asks once per connection whether the socket has these, for an
+older 86Box. Without them, `read_memory` and `write_memory` still work in the bus's
 view a byte at a time, `linear=True` walks the page tables in Python as
 before, and the I/O and PCI tools use the GDB stub.
 
 `86BOX_MIN_COMMIT` is the minimum 86Box for every MCP tool: an upstream
-commit with all of the above, the merge of #8466 (`1be46d317`, 2026-10-22).
+commit with all of the above, the merge of #8584 (`af86678f1`, 2026-10-29).
 Any later master works too; the build scripts only warn about an older one.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.
