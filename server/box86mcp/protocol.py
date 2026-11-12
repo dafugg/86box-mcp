@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import threading
@@ -299,6 +300,18 @@ class Automation:
         r = self.call("regs")
         r.pop("ok", None)
         return r
+
+    def audio_tone(self, hz: float, dbfs: float = -6.0) -> dict:
+        if not math.isfinite(hz) or hz < 0:
+            raise ValueError("hz must be finite and nonnegative")
+        if not math.isfinite(dbfs) or dbfs > 0:
+            raise ValueError("dbfs must be finite and at most 0")
+        try:
+            return self.call(f"audio tone {hz} {dbfs}")
+        except AutomationError as e:
+            if str(e).startswith("usage: audio ") and "audio tone" not in str(e):
+                raise AutomationError("sound_tone needs 86Box with the audio tone command (PR #8819)") from e
+            raise
 
     def audio_level(self, ms: int) -> dict:
         return self.call(f"audio level {int(ms)}")["streams"]
