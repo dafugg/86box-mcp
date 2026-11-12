@@ -74,8 +74,14 @@ older 86Box. Without them, `read_memory` and `write_memory` still work in the bu
 view a byte at a time, `linear=True` walks the page tables in Python as
 before, and the I/O and PCI tools use the GDB stub.
 
-`86BOX_MIN_COMMIT` is the minimum 86Box for every MCP tool: an upstream
-commit with all of the above, the merge of #8584 (`af86678f1`, 2026-10-29).
+### Guest audio input
+
+86Box PR #8819 added `audio tone <hz> [<dBFS>]`. The `sound_tone` tool uses it to
+feed a sine wave into the guest's audio input for recording tests. A frequency
+of 0 restores host input.
+
+`86BOX_MIN_COMMIT` is the minimum 86Box for every MCP tool. It points to the
+merge of #8819 (`99eacf5c6`, 2026-11-12).
 Any later master works too; the build scripts only warn about an older one.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.

@@ -1685,6 +1685,18 @@ def _ring_mix(v: VM, ms: int, stream: str | None):
 
 
 @tool()
+def sound_tone(hz: float, dbfs: float = -6.0) -> str:
+    """Feed a sine wave into both channels of the guest's audio input for recording tests.
+    hz is the frequency in Hz and dbfs is the level relative to full scale (0 dBFS).
+    Set hz to 0 to restore host audio input. Requires 86Box with the audio tone command.
+    """
+    vm().auto.audio_tone(hz, dbfs)
+    if hz == 0:
+        return "restored host audio input"
+    return f"guest audio input set to a {hz:g} Hz sine wave at {dbfs:g} dBFS"
+
+
+@tool()
 def sound_level(ms: int = 200) -> str:
     """How loud each sound stream was over the last ms of emulated time (up to 10 s): peak and RMS
     in dBFS (0 = full scale, -120 = digital silence). Streams: main (sound cards' digital audio),
